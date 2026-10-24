@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: cricket2026-authoritative-server
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run build -w @cricket2026/shared && npm run build -w @cricket2026/server
+    startCommand: npm run start -w @cricket2026/server
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: CORS_ORIGIN
+        value: "*"
+      - key: TICK_RATE_HZ
+        value: 30
+      - key: DEFAULT_OVERS
+        value: 5
+      - key: RECONNECT_GRACE_MS
+        value: 30000
+      - key: MAX_ROOMS
+        value: 100

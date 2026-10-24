@@ -1,6 +1,6 @@
 import { TeamId, TeamPlayingXI } from './team.js';
 import { MatchScorecard } from './scorecard.js';
-import { DRSReviewState } from './umpire.js';
+import { DRSReviewState, UmpireMode } from './umpire.js';
 import {
   BallPhysicalState,
   BowlingDeliveryIntent,
@@ -15,13 +15,26 @@ export type TossDecision = 'BAT' | 'BOWL';
 export interface TossState {
   isCompleted: boolean;
   callerTeamId: TeamId;
+  callerCaptainName?: string;
+  opponentCaptainName?: string;
   coinChoice: CoinChoice;
   coinResult?: CoinChoice;
   winnerTeamId?: TeamId;
   decision?: TossDecision;
+  flipAnimationDurationMs?: number;
 }
 
 export type MatchPhase =
+  // Standard Phase 3 canonical lifecycle
+  | 'LOBBY'
+  | 'TEAM_SELECTION'
+  | 'TOSS'
+  | 'INNINGS_SETUP'
+  | 'ACTIVE_MATCH'
+  | 'INNINGS_BREAK'
+  | 'SECOND_INNINGS'
+  | 'COMPLETED_MATCH'
+  // Backward-compatible aliases
   | 'WAITING_FOR_PLAYERS'
   | 'TOSS_IN_PROGRESS'
   | 'INNINGS_1_IN_PROGRESS'
@@ -60,6 +73,14 @@ export interface CricketGameState {
   scorecard: MatchScorecard;
   activeDelivery: ActiveDeliveryState;
   drs: DRSReviewState;
+  umpireMode: UmpireMode;
+  manualUmpireSocketId?: string | null;
+  umpirePendingDecision?: {
+    signalType: string;
+    deadlineMs: number;
+    timeoutSeconds: number;
+    requestedAt: number;
+  } | null;
   serverTick: number;
   lastTickTimestamp: number;
 }

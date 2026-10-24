@@ -11,6 +11,7 @@ export interface TeamPlayingXI {
   players: PlayerProfile[]; // Exactly 11 players
   captainId: string;
   wicketKeeperId: string;
+  battingOrder?: string[];
   fieldPositions: Record<string, FieldPositionName>; // playerId -> field position
   customFieldCoordinates?: Record<string, { x: number; z: number }>; // exact coordinates on outfield
 }

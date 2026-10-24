@@ -14,6 +14,14 @@ export interface RoomSettings {
   isPrivate: boolean;
   allowSpectators: boolean;
   deliveryTimeLimitSec: number; // e.g. 20s shot clock
+  minPlayersPerTeam: number; // Documented minimum human players per team (default: 1)
+}
+
+export interface RoomNotification {
+  id: string;
+  type: 'INFO' | 'WARNING' | 'SUCCESS' | 'DISCONNECT' | 'RECONNECT';
+  message: string;
+  timestamp: number;
 }
 
 export interface RoomParticipant {
@@ -26,7 +34,7 @@ export interface RoomParticipant {
   assignedRole: 'PLAYER' | 'SPECTATOR' | 'MANUAL_UMPIRE';
   assignedTeamId?: TeamId | null;
   assignedPlayerId?: string | null; // cricketer in Playing XI (1 of 11)
-  reconnectToken: string;
+  reconnectToken?: string;
   connectedAt: number;
   lastPingMs: number;
   isDisconnected: boolean;

@@ -85,6 +85,7 @@ export type FieldingAction =
   | 'DIVE'
   | 'SLIDE'
   | 'PICKUP'
+  | 'CATCH_ATTEMPT'
   | 'UNDERARM_THROW'
   | 'OVERARM_THROW'
   | 'BACKUP';
@@ -94,6 +95,8 @@ export interface FieldingIntent {
   action: FieldingAction;
   targetPosition?: Vector3D;
   throwTargetEnd?: 'STRIKER_END' | 'BOWLER_END';
+  throwPower?: number; // 0 to 100
+  timestamp?: number;
 }
 
 export interface BallPhysicalState {
@@ -106,4 +109,7 @@ export interface BallPhysicalState {
   hasBatContact: boolean;
   hasPadContact: boolean;
   isInAir: boolean;
+  possessedByFielderId?: string | null;
+  isThrowInFlight?: boolean;
+  throwTargetEnd?: 'STRIKER_END' | 'BOWLER_END' | null;
 }

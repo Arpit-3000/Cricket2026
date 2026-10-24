@@ -63,6 +63,8 @@ export interface PlayerProfile {
   attributes: PlayerAttributes;
   isAi: boolean;
   assignedHumanId?: string | null; // socket id / user id if human controlled
+  fieldPosition?: FieldPositionName;
+  isCaptain?: boolean;
 }
 
 export interface PlayerAssignment {
@@ -76,3 +78,57 @@ export interface PlayerAssignment {
   isNonStriker: boolean;
   isCurrentBowler: boolean;
 }
+
+export type PlayerAnimationState =
+  | 'IDLE'
+  | 'WALK'
+  | 'RUN'
+  | 'SPRINT'
+  | 'SLIDE'
+  | 'DIVE'
+  | 'BATTING_STANCE'
+  | 'BACKSWING'
+  | 'SHOT_EXECUTION'
+  | 'ATTACKING_SHOT'
+  | 'DEFENSIVE_SHOT'
+  | 'DEFENSIVE_BLOCK'
+  | 'FOLLOW_THROUGH'
+  | 'BOWLING_RUNUP'
+  | 'BOWLER_RUNUP'
+  | 'DELIVERY_STRIDE'
+  | 'RELEASE'
+  | 'BOWLER_FOLLOW_THROUGH'
+  | 'KEEPER_READY'
+  | 'CELEBRATION'
+  | 'FIELDING_PICKUP'
+  | 'CATCHING'
+  | 'THROWING';
+
+export interface PlayerEntityState {
+  playerId: string;
+  teamId: 'TEAM_A' | 'TEAM_B';
+  displayName: string;
+  role: FieldPositionName | CricketRole | string;
+  jerseyNumber?: number;
+  position: { x: number; y: number; z: number };
+  rotationY: number;
+  velocity: { x: number; y: number; z: number };
+  animationState: PlayerAnimationState;
+  sequence: number;
+  serverTimestamp: number;
+  isHuman: boolean;
+  isDisconnected?: boolean;
+  assignedHumanId?: string | null;
+}
+
+export interface PlayerMovementInput {
+  roomCode: string;
+  playerId: string;
+  position: { x: number; y: number; z: number };
+  rotationY: number;
+  velocity: { x: number; y: number; z: number };
+  animationState: PlayerAnimationState;
+  sequence: number;
+  clientTimestamp: number;
+}
+

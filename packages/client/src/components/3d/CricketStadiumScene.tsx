@@ -1,149 +1,295 @@
-import React from 'react';
-import { Canvas } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Text } from '@react-three/drei';
+import React, { Component, ReactNode, useRef, useEffect } from 'react';
 import * as THREE from 'three';
-import {
-  GROUND_DIMENSIONS,
-  DEFAULT_FIELD_PRESETS,
-  CricketGameState
-} from '@cricket2026/shared';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { OrbitControls, PerspectiveCamera, Stars } from '@react-three/drei';
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
+import { CricketGameState, GROUND_DIMENSIONS, PlayerEntityState } from '@cricket2026/shared';
+import { StadiumGeometry } from './StadiumGeometry.js';
+import { CricketPitch } from './CricketPitch.js';
+import { Wickets3D } from './Wickets3D.js';
+import { CricketerAvatars } from './CricketerAvatars.js';
+import { cricketAudio } from '../../services/CricketAudioEngine.js';
 
-export type CameraViewMode = 'STRIKER' | 'BOWLER' | 'BROADCAST' | 'SPECTATOR';
+interface WebGLErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface WebGLErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
+
+class WebGLErrorBoundary extends Component<WebGLErrorBoundaryProps, WebGLErrorBoundaryState> {
+  constructor(props: WebGLErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error): WebGLErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.warn('[CricketStadiumScene] WebGL Canvas initialization error caught by boundary:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-full h-full relative overflow-hidden bg-gradient-to-b from-slate-950 via-[#071328] to-slate-950 flex flex-col items-center justify-center p-6 text-center select-none">
+          {/* Stylized 2D Outfield Oval Silhouette */}
+          <div className="w-[480px] h-[300px] rounded-[50%] border-2 border-emerald-500/20 bg-emerald-950/20 relative flex items-center justify-center shadow-2xl shadow-emerald-900/30">
+            {/* 30-yard circle */}
+            <div className="w-[320px] h-[190px] rounded-[50%] border border-dashed border-emerald-400/30 flex items-center justify-center">
+              {/* Pitch */}
+              <div className="w-8 h-28 bg-amber-200/30 rounded border border-amber-300/40 relative flex flex-col justify-between p-1">
+                <div className="w-full h-0.5 bg-white/80" />
+                <div className="text-[7px] font-bold text-amber-200/60 uppercase tracking-widest rotate-90 mx-auto">Pitch</div>
+                <div className="w-full h-0.5 bg-white/80" />
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 glass-panel px-4 py-2 rounded-xl border border-white/10 text-xs text-slate-300 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+            <span>3D Arena running in 2D Stadium Compatibility Mode</span>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export type CameraViewMode = 'BROADCAST' | 'BATTING' | 'BOWLING' | 'FIELD_SIDE' | 'SPECTATOR' | 'REPLAY' | 'FIELDER';
 
 interface StadiumProps {
   cameraMode: CameraViewMode;
   gameState: CricketGameState | null;
+  playerEntities?: Record<string, PlayerEntityState>;
   myPlayerId?: string | null;
+  crowdDensity?: 'low' | 'high' | 'off';
+  graphicsQuality?: 'LOW' | 'MEDIUM' | 'HIGH' | 'ULTRA';
+  shadowsEnabled?: boolean;
+  fov?: number;
+  lastUmpireSignal?: string | null;
+  masterVolume?: number;
+  crowdVolume?: number;
+  sfxVolume?: number;
+}
+
+interface CameraControllerProps {
+  cameraMode: CameraViewMode;
+  targetPos: [number, number, number];
+  targetLookAt: [number, number, number];
+  fov: number;
 }
 
 /**
- * 3D Wickets & Bails Component
+ * Broadcast Camera Controller with smooth television crane/dolly damping and dynamic ball tracking
  */
-function Wickets({ zPosition }: { zPosition: number }) {
-  const stumpSpacing = 0.08; // 8cm
-  return (
-    <group position={[0, 0, zPosition]}>
-      {/* 3 Stumps */}
-      {[-stumpSpacing, 0, stumpSpacing].map((xOffset, idx) => (
-        <mesh key={idx} position={[xOffset, GROUND_DIMENSIONS.STUMP_HEIGHT_METERS / 2, 0]} castShadow>
-          <cylinderGeometry args={[0.02, 0.02, GROUND_DIMENSIONS.STUMP_HEIGHT_METERS, 16]} />
-          <meshStandardMaterial color="#d4a373" roughness={0.4} />
-        </mesh>
-      ))}
-      {/* 2 Bails */}
-      <mesh position={[-stumpSpacing / 2, GROUND_DIMENSIONS.STUMP_HEIGHT_METERS + 0.015, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[0.008, 0.008, stumpSpacing * 1.1, 8]} />
-        <meshStandardMaterial color="#fef08a" roughness={0.3} />
-      </mesh>
-      <mesh position={[stumpSpacing / 2, GROUND_DIMENSIONS.STUMP_HEIGHT_METERS + 0.015, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[0.008, 0.008, stumpSpacing * 1.1, 8]} />
-        <meshStandardMaterial color="#fef08a" roughness={0.3} />
-      </mesh>
-    </group>
-  );
-}
+const CameraController: React.FC<CameraControllerProps> = ({
+  cameraMode,
+  targetPos,
+  targetLookAt,
+  fov
+}) => {
+  const { camera } = useThree();
+  const controlsRef = useRef<OrbitControlsImpl>(null);
+  const currentPos = useRef(new THREE.Vector3(...targetPos));
+  const currentLookAt = useRef(new THREE.Vector3(...targetLookAt));
 
-/**
- * 3D Cricketer Avatar Component
- */
-function CricketerModel({
-  position,
-  label,
-  isStriker,
-  isBowler,
-  isHuman,
-  isUserCricketer,
-  teamColor = '#1d4ed8'
-}: {
-  position: [number, number, number];
-  label: string;
-  isStriker?: boolean;
-  isBowler?: boolean;
-  isHuman?: boolean;
-  isUserCricketer?: boolean;
-  teamColor?: string;
-}) {
+  // Initialize camera position immediately on first load
+  useEffect(() => {
+    if (camera) {
+      if ('fov' in camera) {
+        (camera as THREE.PerspectiveCamera).fov = fov;
+        camera.updateProjectionMatrix();
+      }
+    }
+  }, [fov, camera]);
+
+  // Smooth cinematic camera damping per frame
+  useFrame((_state, delta) => {
+    if (cameraMode === 'SPECTATOR') return; // OrbitControls handles spectator mode
+
+    const speed = Math.min(1, delta * 6.5);
+
+    // Lerp camera position
+    currentPos.current.x = THREE.MathUtils.lerp(currentPos.current.x, targetPos[0], speed);
+    currentPos.current.y = THREE.MathUtils.lerp(currentPos.current.y, targetPos[1], speed);
+    currentPos.current.z = THREE.MathUtils.lerp(currentPos.current.z, targetPos[2], speed);
+    camera.position.set(currentPos.current.x, currentPos.current.y, currentPos.current.z);
+
+    // Lerp camera target lookAt
+    currentLookAt.current.x = THREE.MathUtils.lerp(currentLookAt.current.x, targetLookAt[0], speed);
+    currentLookAt.current.y = THREE.MathUtils.lerp(currentLookAt.current.y, targetLookAt[1], speed);
+    currentLookAt.current.z = THREE.MathUtils.lerp(currentLookAt.current.z, targetLookAt[2], speed);
+    camera.lookAt(currentLookAt.current.x, currentLookAt.current.y, currentLookAt.current.z);
+  });
+
   return (
-    <group position={position}>
-      {/* Player marker ring */}
-      <mesh position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.5, 0.65, 32]} />
-        <meshBasicMaterial
-          color={isUserCricketer ? '#eab308' : isHuman ? '#38bdf8' : '#64748b'}
-          side={THREE.DoubleSide}
+    <>
+      <PerspectiveCamera makeDefault position={targetPos} fov={fov} />
+      {cameraMode === 'SPECTATOR' && (
+        <OrbitControls
+          ref={controlsRef}
+          maxPolarAngle={Math.PI / 2 - 0.05} // prevent descending below ground
+          minDistance={6}
+          maxDistance={140}
+          dampingFactor={0.08}
+          enableDamping
         />
-      </mesh>
-
-      {/* Floating HUD Label */}
-      <Text
-        position={[0, 2.3, 0]}
-        fontSize={0.32}
-        color={isUserCricketer ? '#facc15' : '#ffffff'}
-        anchorX="center"
-        anchorY="middle"
-      >
-        {`${label}${isUserCricketer ? ' ★ (YOU)' : isHuman ? ' 👤' : ' 🤖'}`}
-      </Text>
-
-      {/* Cricketer Torso */}
-      <mesh position={[0, 1.25, 0]} castShadow>
-        <capsuleGeometry args={[0.22, 0.65, 8, 16]} />
-        <meshStandardMaterial color={teamColor} roughness={0.6} />
-      </mesh>
-
-      {/* Helmet / Head */}
-      <mesh position={[0, 1.82, 0]} castShadow>
-        <sphereGeometry args={[0.16, 16, 16]} />
-        <meshStandardMaterial color={isStriker ? '#1e3a8a' : '#0f172a'} roughness={0.3} metalness={0.2} />
-      </mesh>
-
-      {/* Bat (for striker) */}
-      {isStriker && (
-        <group position={[0.3, 0.7, 0.2]} rotation={[0.4, 0.2, -0.3]}>
-          <mesh castShadow>
-            <boxGeometry args={[0.1, 0.8, 0.04]} />
-            <meshStandardMaterial color="#c29b68" roughness={0.5} />
-          </mesh>
-          <mesh position={[0, 0.5, 0]}>
-            <cylinderGeometry args={[0.02, 0.02, 0.25, 8]} />
-            <meshStandardMaterial color="#1e293b" />
-          </mesh>
-        </group>
       )}
-
-      {/* Bowling Ball in hand (for bowler) */}
-      {isBowler && (
-        <mesh position={[0.35, 1.2, 0.1]} castShadow>
-          <sphereGeometry args={[0.045, 16, 16]} />
-          <meshStandardMaterial color="#dc2626" roughness={0.4} />
-        </mesh>
-      )}
-    </group>
+    </>
   );
-}
+};
 
-/**
- * Main 3D Stadium Environment
- */
 export const CricketStadiumScene: React.FC<StadiumProps> = ({
   cameraMode,
   gameState,
-  myPlayerId
+  playerEntities,
+  myPlayerId,
+  crowdDensity = 'high',
+  graphicsQuality = 'HIGH',
+  shadowsEnabled = true,
+  fov = 50,
+  lastUmpireSignal,
+  masterVolume = 80,
+  crowdVolume = 70,
+  sfxVolume = 85
 }) => {
   const pitchHalfLength = GROUND_DIMENSIONS.PITCH_LENGTH_METERS / 2; // ~10.06m
+  const isLowGraphics = graphicsQuality === 'LOW';
+  const shouldCastShadow = shadowsEnabled && !isLowGraphics;
+  const shadowResolution = isLowGraphics ? 512 : graphicsQuality === 'MEDIUM' ? 1024 : 2048;
 
-  // Camera settings per mode
+  // Track previous delivery events to trigger procedural Web Audio sound effects
+  const prevShotPlayedRef = useRef(false);
+  const prevPhaseRef = useRef<string | null>(null);
+  const prevBallBouncedRef = useRef(false);
+  const prevUmpireSignalRef = useRef<string | null>(null);
+
+  // Update audio volume levels
+  useEffect(() => {
+    cricketAudio.updateVolumes(masterVolume, crowdVolume, sfxVolume);
+  }, [masterVolume, crowdVolume, sfxVolume]);
+
+  // Start crowd murmur ambience on mount, stop on unmount
+  useEffect(() => {
+    cricketAudio.startCrowdAmbience();
+    return () => {
+      cricketAudio.stopCrowdAmbience();
+    };
+  }, []);
+
+  // Reactive audio triggers based on gameplay state events
+  useEffect(() => {
+    if (!gameState) return;
+
+    const deliveryPhase = gameState.activeDelivery.deliveryPhase;
+
+    // 1. Bat Impact Audio
+    if (deliveryPhase === 'BAT_INTERACTION' && !prevShotPlayedRef.current) {
+      const timingOffset = gameState.activeDelivery.batterIntent?.timingOffsetMs || 0;
+      if (Math.abs(timingOffset) <= 20) {
+        cricketAudio.playBatHit('SWEET_SPOT');
+      } else if (Math.abs(timingOffset) <= 45) {
+        cricketAudio.playBatHit('GOOD');
+      } else {
+        cricketAudio.playBatHit('EDGED');
+      }
+      prevShotPlayedRef.current = true;
+    }
+    if (deliveryPhase === 'BOWLER_RUNUP' || deliveryPhase === 'AWAITING_BOWLER_CONFIRM') {
+      prevShotPlayedRef.current = false;
+    }
+
+    // 2. Pitch / Turf Bounce Audio
+    if (deliveryPhase === 'BALL_PITCHED' && !prevBallBouncedRef.current) {
+      const speed = gameState.activeDelivery.bowlerIntent?.releaseSpeedKmph || 135;
+      cricketAudio.playBallBounce(speed / 145);
+      prevBallBouncedRef.current = true;
+    }
+    if (deliveryPhase === 'BOWLER_RUNUP' || deliveryPhase === 'AWAITING_BOWLER_CONFIRM') {
+      prevBallBouncedRef.current = false;
+    }
+
+    // 3. Wickets, Boundaries & Crowd Reaction Audio
+    if (gameState.phase !== prevPhaseRef.current) {
+      if (gameState.phase === 'MID_INNINGS_BREAK' || gameState.phase === 'INNINGS_BREAK') {
+        cricketAudio.playCrowdReaction('APPLAUSE');
+      } else if (gameState.phase === 'MATCH_CONCLUDED' || gameState.phase === 'COMPLETED_MATCH') {
+        cricketAudio.playCrowdReaction('ROAR');
+      }
+      prevPhaseRef.current = gameState.phase;
+    }
+
+    // 4. Umpire Decision Whistle / Signal Audio
+    if (lastUmpireSignal && lastUmpireSignal !== prevUmpireSignalRef.current) {
+      cricketAudio.playUmpireSignal();
+      if (['OUT', 'WICKET'].includes(lastUmpireSignal)) {
+        cricketAudio.playStumpHit();
+        cricketAudio.playCrowdReaction('WICKET');
+      } else if (['FOUR', 'SIX'].includes(lastUmpireSignal)) {
+        cricketAudio.playCrowdReaction(lastUmpireSignal === 'SIX' ? 'BOUNDARY_SIX' : 'BOUNDARY_FOUR');
+      } else if (['WIDE', 'NO_BALL'].includes(lastUmpireSignal)) {
+        cricketAudio.playCrowdReaction('GASP');
+      }
+      prevUmpireSignalRef.current = lastUmpireSignal;
+    }
+  }, [gameState, lastUmpireSignal]);
+
+  // Camera presets tailored to realistic televised cricket viewpoints
   const getCameraConfig = (): { position: [number, number, number]; lookAt: [number, number, number] } => {
+    const ballPos = gameState?.activeDelivery.ball.position;
+
     switch (cameraMode) {
-      case 'STRIKER':
-        return { position: [0, 2.4, pitchHalfLength + 4.5], lookAt: [0, 1.0, -pitchHalfLength] };
-      case 'BOWLER':
-        return { position: [0, 3.2, -pitchHalfLength - 12], lookAt: [0, 1.0, pitchHalfLength] };
-      case 'BROADCAST':
-        return { position: [36, 18, 0], lookAt: [0, 1.5, 0] };
+      case 'BATTING':
+        // Over-the-shoulder behind striker batsman looking down pitch towards bowler
+        return { position: [0, 2.3, pitchHalfLength + 3.8], lookAt: [0, 1.2, -pitchHalfLength] };
+
+      case 'BOWLING':
+        // Behind bowler at delivery mark looking down pitch towards striker's wickets
+        return { position: [0, 3.4, -pitchHalfLength - 12], lookAt: [0, 1.2, pitchHalfLength] };
+
+      case 'FIELD_SIDE':
+        // Field-side dugout / slip-cordon perspective looking across central pitch
+        return { position: [46, 2.8, 18], lookAt: [0, 1.2, 0] };
+
+      case 'REPLAY':
+        // Slow-motion cinematic replay camera focusing on striker wicket zone
+        return {
+          position: [6.5, 2.2, pitchHalfLength + 4.5],
+          lookAt: [0, 1.1, pitchHalfLength]
+        };
+
       case 'SPECTATOR':
-      default:
-        return { position: [40, 28, 45], lookAt: [0, 0, 0] };
+        // High stadium overview for free orbit exploration
+        return { position: [42, 30, 48], lookAt: [0, 2, 0] };
+
+      case 'FIELDER': {
+        // Follow active fielder (or ball if possessed, or closest fielder)
+        const possessedId = gameState?.activeDelivery.ball.possessedByFielderId;
+        const activeFielder = (possessedId && playerEntities && playerEntities[possessedId])
+          ? playerEntities[possessedId]
+          : Object.values(playerEntities || {}).find(p => p.role === 'FIELDER');
+
+        if (activeFielder) {
+          return {
+            position: [activeFielder.position.x - 4, 3, activeFielder.position.z - 4],
+            lookAt: [activeFielder.position.x, 1.2, activeFielder.position.z]
+          };
+        }
+        return { position: [25, 8, 25], lookAt: [ballPos?.x || 0, 1.0, ballPos?.z || 0] };
+      }
+
+      case 'BROADCAST':
+      default: {
+        // Elevated main TV broadcast camera on the grandstand sideline with dynamic ball tracking
+        const trackX = ballPos ? ballPos.x * 0.35 : 0;
+        const trackZ = ballPos ? ballPos.z * 0.35 : 0;
+        return { position: [36, 17, 0], lookAt: [trackX, 1.2, trackZ] };
+      }
     }
   };
 
@@ -151,169 +297,77 @@ export const CricketStadiumScene: React.FC<StadiumProps> = ({
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-slate-950">
-      <Canvas shadows>
-        <PerspectiveCamera makeDefault position={camConfig.position} fov={50} />
-        {cameraMode === 'SPECTATOR' && (
-          <OrbitControls maxPolarAngle={Math.PI / 2 - 0.05} maxDistance={120} minDistance={5} />
-        )}
-
-        {/* Stadium Night & Sun Lights */}
-        <ambientLight intensity={0.65} />
-        <directionalLight
-          position={[40, 60, 30]}
-          intensity={1.2}
-          castShadow
-          shadow-mapSize-width={2048}
-          shadow-mapSize-height={2048}
-          shadow-camera-near={10}
-          shadow-camera-far={200}
-          shadow-camera-left={-60}
-          shadow-camera-right={60}
-          shadow-camera-top={60}
-          shadow-camera-bottom={-60}
-        />
-
-        {/* 4 Corner Floodlight Towers */}
-        {[
-          [-55, 38, -55],
-          [55, 38, -55],
-          [-55, 38, 55],
-          [55, 38, 55]
-        ].map((pos, idx) => (
-          <group key={idx} position={pos as [number, number, number]}>
-            <mesh>
-              <cylinderGeometry args={[0.6, 1.2, 38, 8]} />
-              <meshStandardMaterial color="#334155" metalness={0.8} />
-            </mesh>
-            <mesh position={[0, 19, 0]}>
-              <boxGeometry args={[6, 4, 2]} />
-              <meshStandardMaterial color="#f8fafc" emissive="#f8fafc" emissiveIntensity={1.5} />
-            </mesh>
-            <spotLight
-              position={[0, 18, 0]}
-              target-position={[0, 0, 0]}
-              intensity={0.8}
-              angle={0.7}
-              penumbra={0.5}
-            />
-          </group>
-        ))}
-
-        {/* Circular Outfield Grass */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]} receiveShadow>
-          <circleGeometry args={[GROUND_DIMENSIONS.BOUNDARY_RADIUS_METERS, 64]} />
-          <meshStandardMaterial color="#166534" roughness={0.8} />
-        </mesh>
-
-        {/* 30-Yard Inner Circle Marking */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
-          <ringGeometry
-            args={[
-              GROUND_DIMENSIONS.INNER_CIRCLE_RADIUS_METERS - 0.1,
-              GROUND_DIMENSIONS.INNER_CIRCLE_RADIUS_METERS + 0.1,
-              64
-            ]}
+      <WebGLErrorBoundary>
+        <Canvas shadows={shouldCastShadow}>
+          {/* Dynamic Broadcast Camera Controller with smooth damping and tracking */}
+          <CameraController
+            cameraMode={cameraMode}
+            targetPos={camConfig.position}
+            targetLookAt={camConfig.lookAt}
+            fov={fov}
           />
-          <meshBasicMaterial color="#ffffff" transparent opacity={0.6} />
-        </mesh>
 
-        {/* Boundary Rope Ring */}
-        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.08, 0]}>
-          <ringGeometry
-            args={[
-              GROUND_DIMENSIONS.BOUNDARY_RADIUS_METERS - 0.35,
-              GROUND_DIMENSIONS.BOUNDARY_RADIUS_METERS,
-              64
-            ]}
+          {/* Stadium Atmosphere Ground Fog */}
+          <fogExp2 attach="fog" args={['#060c18', isLowGraphics ? 0.001 : 0.0035]} />
+
+          {/* Realistic Night Sky with Shimmering Stars */}
+          <Stars
+            radius={160}
+            depth={50}
+            count={isLowGraphics ? 800 : 2500}
+            factor={4}
+            saturation={0}
+            fade
+            speed={1}
           />
-          <meshStandardMaterial color="#f8fafc" roughness={0.5} />
-        </mesh>
+          <mesh>
+            <sphereGeometry args={[220, 24, 24]} />
+            <meshBasicMaterial color="#040812" side={THREE.BackSide} />
+          </mesh>
 
-        {/* 22-Yard Pitch Strip */}
-        <mesh position={[0, 0.01, 0]} receiveShadow>
-          <boxGeometry
-            args={[
-              GROUND_DIMENSIONS.PITCH_WIDTH_METERS,
-              0.02,
-              GROUND_DIMENSIONS.PITCH_LENGTH_METERS + 2.0
-            ]}
+          {/* Ambient & Natural Stadium Environment Light */}
+          <ambientLight intensity={isLowGraphics ? 0.75 : 0.55} color="#e2e8f0" />
+
+          {/* Directional Sunlight / Twilight Fill */}
+          <directionalLight
+            position={[30, 65, 30]}
+            intensity={1.1}
+            castShadow={shouldCastShadow}
+            shadow-mapSize-width={shadowResolution}
+            shadow-mapSize-height={shadowResolution}
+            shadow-camera-near={10}
+            shadow-camera-far={220}
+            shadow-camera-left={-75}
+            shadow-camera-right={75}
+            shadow-camera-top={75}
+            shadow-camera-bottom={-75}
+            shadow-bias={-0.0004}
           />
-          <meshStandardMaterial color="#b48956" roughness={0.9} />
-        </mesh>
 
-        {/* Popping Crease White Markings */}
-        {[-pitchHalfLength + GROUND_DIMENSIONS.POPPING_CREASE_METERS, pitchHalfLength - GROUND_DIMENSIONS.POPPING_CREASE_METERS].map(
-          (z, i) => (
-            <mesh key={i} position={[0, 0.022, z]} rotation={[-Math.PI / 2, 0, 0]}>
-              <planeGeometry args={[GROUND_DIMENSIONS.PITCH_WIDTH_METERS * 0.95, 0.08]} />
-              <meshBasicMaterial color="#ffffff" />
-            </mesh>
-          )
-        )}
+          {/* 1. 3D Stadium Architecture, Grandstands, Roof & Floodlights */}
+          <StadiumGeometry
+            crowdDensity={crowdDensity}
+            shadowsEnabled={shadowsEnabled}
+            graphicsQuality={graphicsQuality}
+            gameState={gameState}
+          />
 
-        {/* Stumps & Bails at both ends */}
-        <Wickets zPosition={pitchHalfLength} />
-        <Wickets zPosition={-pitchHalfLength} />
+          {/* 2. 22-Yard Turf Pitch, Creases, Outfield Stripes, 30-Yd Ring & Boundary Rope */}
+          <CricketPitch />
 
-        {/* Striker Cricketer */}
-        <CricketerModel
-          position={[0, 0, pitchHalfLength - 1.2]}
-          label="Striker"
-          isStriker
-          isUserCricketer={gameState?.currentStrikerId === myPlayerId}
-          teamColor="#1e40af"
-        />
+          {/* 3. Two Batting Wickets with Stumps & Bails */}
+          <Wickets3D zPosition={pitchHalfLength} />
+          <Wickets3D zPosition={-pitchHalfLength} />
 
-        {/* Non-Striker Cricketer */}
-        <CricketerModel
-          position={[1.5, 0, -pitchHalfLength + 1.2]}
-          label="Non-Striker"
-          isUserCricketer={gameState?.currentNonStrikerId === myPlayerId}
-          teamColor="#1e40af"
-        />
-
-        {/* Bowler at Runup Mark */}
-        <CricketerModel
-          position={[0, 0, -pitchHalfLength - 8.5]}
-          label="Bowler"
-          isBowler
-          isUserCricketer={gameState?.currentBowlerId === myPlayerId}
-          teamColor="#15803d"
-        />
-
-        {/* Wicket-Keeper behind Striker Stumps */}
-        <CricketerModel
-          position={[0, 0, pitchHalfLength + 4.5]}
-          label="Keeper"
-          teamColor="#15803d"
-        />
-
-        {/* Outfield Fielders at standard coordinates */}
-        {Object.entries(DEFAULT_FIELD_PRESETS)
-          .filter(([name]) => !['BOWLER', 'WICKET_KEEPER'].includes(name))
-          .slice(0, 9)
-          .map(([name, coords]) => (
-            <CricketerModel
-              key={name}
-              position={[coords.x, 0, coords.z]}
-              label={name.replace('_', ' ')}
-              teamColor="#15803d"
-            />
-          ))}
-
-        {/* 3D Cricket Ball */}
-        <mesh
-          position={[
-            gameState?.activeDelivery.ball.position.x || 0,
-            Math.max(0.04, gameState?.activeDelivery.ball.position.y || 0.8),
-            gameState?.activeDelivery.ball.position.z || 0
-          ]}
-          castShadow
-        >
-          <sphereGeometry args={[GROUND_DIMENSIONS.BALL_RADIUS_METERS, 24, 24]} />
-          <meshStandardMaterial color="#dc2626" roughness={0.3} metalness={0.1} />
-        </mesh>
-      </Canvas>
+          {/* 4. Realistic Cricketers (Batters, Bowlers, Keepers, Fielders, Umpires) & Ball */}
+          <CricketerAvatars
+            gameState={gameState}
+            playerEntities={playerEntities}
+            myPlayerId={myPlayerId}
+            lastUmpireSignal={lastUmpireSignal}
+          />
+        </Canvas>
+      </WebGLErrorBoundary>
     </div>
   );
 };

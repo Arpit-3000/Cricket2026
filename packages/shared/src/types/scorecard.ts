@@ -1,6 +1,4 @@
-/**
- * Professional cricket scorecard data structures conforming to international broadcast standards.
- */
+import { TeamId } from './team.js';
 
 export interface BattingScorecardEntry {
   playerId: string;
@@ -68,6 +66,15 @@ export interface MatchScorecard {
   roomId: string;
   innings: [InningsScorecard, InningsScorecard?];
   currentInningsIndex: 1 | 2;
+  winnerTeamId?: TeamId | 'TIE';
   matchResultCommentary?: string;
   isCompleted: boolean;
+  superOver?: {
+    innings: [InningsScorecard, InningsScorecard?];
+    currentInningsIndex: 1 | 2;
+    target?: number;
+    winnerTeamId?: TeamId | 'TIE';
+    commentary?: string;
+    isCompleted: boolean;
+  };
 }
