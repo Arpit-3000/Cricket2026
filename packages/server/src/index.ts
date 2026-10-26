@@ -7,15 +7,17 @@ import { config } from './config/index.js';
 import { RoomManager } from './services/RoomManager.js';
 import { registerSocketHandlers } from './socket/registerHandlers.js';
 
+const corsOriginOption = config.allowedOrigins === '*' ? true : config.allowedOrigins;
+
 const app = express();
-app.use(cors({ origin: config.allowedOrigins, credentials: true }));
+app.use(cors({ origin: corsOriginOption, credentials: true }));
 app.use(express.json());
 
 const server = http.createServer(app);
 
 const io = new Server<ClientToServerEvents, ServerToClientEvents>(server, {
   cors: {
-    origin: config.allowedOrigins,
+    origin: corsOriginOption,
     methods: ['GET', 'POST'],
     credentials: true
   },

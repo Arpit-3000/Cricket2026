@@ -17,6 +17,9 @@
     "typecheck": "tsc --noEmit",
     "test": "tsx --test src/__tests__/rulesAndStateMachine.test.ts"
   },
+  "dependencies": {
+    "typescript": "^5.7.3"
+  },
   "devDependencies": {
     "@types/node": "^20.17.10",
     "typescript": "^5.7.3"

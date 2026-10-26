@@ -7,11 +7,20 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build -w @cricket2026/shared && npm run build -w @cricket2026/server && npm run build -w @cricket2026/client",
+    "build:server": "npm run build -w @cricket2026/shared && npm run build -w @cricket2026/server",
+    "build:client": "npm run build -w @cricket2026/shared && npm run build -w @cricket2026/client",
+    "build:shared": "npm run build -w @cricket2026/shared",
+    "start": "node packages/server/dist/index.js",
+    "start:server": "node packages/server/dist/index.js",
+    "start:client": "npm run preview -w @cricket2026/client",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "dev:server": "npm run dev -w @cricket2026/server",
     "dev:client": "npm run dev -w @cricket2026/client"
+  },
+  "dependencies": {
+    "typescript": "^5.7.3"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
